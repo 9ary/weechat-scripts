@@ -105,8 +105,7 @@ def catchExceptions(f):
 # -----------------------------------------------------------------------------
 # Script Callbacks
 
-buffer_playback = {}
-current_playback = ''
+buffer_playback = set()
 nick_talked = set()
 
 _hostmaskRe = re.compile(r':?\S+!\S+@\S+') # poor but good enough
@@ -121,7 +120,13 @@ def playback_cb(data, modifier, modifier_data, string):
            COLOR_REASON_QUIT, SMART_FILTER
     global send_signals, znc_timestamp
 
-    plugin, buffer_name, tags = modifier_data.split(';')
+    if modifier_data.startswith('0x'):
+        buffer, tags = modifier_data.split(';', 1)
+        plugin = weechat.buffer_get_string(buffer, 'plugin')
+        buffer_name = weechat.buffer_get_string(buffer, 'name')
+    else:
+        plugin, buffer_name, tags = modifier_data.split(';', 2)
+        buffer = weechat.buffer_search(plugin, buffer_name)
     if plugin != 'irc' or buffer_name == 'irc_raw':
         return string
 
@@ -132,7 +137,6 @@ def playback_cb(data, modifier, modifier_data, string):
     
     global buffer_playback
     if 'nick_***' in tags:
-        global current_playback
         line = string.partition('\t')[2]
         if line in ['Buffer Playback...', 'Backlog playback...']:
             weechat.hook_signal_send("znc-playback-start",
@@ -141,14 +145,10 @@ def playback_cb(data, modifier, modifier_data, string):
             debug("* buffer playback for %s", buffer_name)
             get_config_options()
             nick_talked.clear()
-            buffer = weechat.buffer_search(plugin, buffer_name)
-            buffer_playback[buffer_name] = buffer
-            current_playback = buffer_name
+            buffer_playback.add(buffer)
         elif line == 'Playback Complete.':
-            buffer = buffer_playback[buffer_name]
-            del buffer_playback[buffer_name]
+            buffer_playback.remove(buffer)
             debug("* end of playback for %s", buffer_name)
-            current_playback = ''
             weechat.hook_signal_send("znc-playback-stop",
                                      WEECHAT_HOOK_SIGNAL_STRING,
                                      buffer_name)
@@ -157,10 +157,8 @@ def playback_cb(data, modifier, modifier_data, string):
         prnt_date_tags(buffer, 0, ','.join(tags), string)
         return ''
 
-    elif not (buffer_playback and buffer_name in buffer_playback):
+    elif buffer not in buffer_playback:
         return string
-
-    buffer = buffer_playback[buffer_name]
 
     #debug(string)
 
@@ -209,7 +207,8 @@ def playback_cb(data, modifier, modifier_data, string):
     hostmask, s, line = line.partition(' ')
     nick = hostmask[:hostmask.find('!')]
     host = hostmask[len(nick) + 1:]
-    server, channel = buffer_name.split('.', 1)
+    server = weechat.buffer_get_string(buffer, 'localvar_server')
+    channel = weechat.buffer_get_string(buffer, 'localvar_channel')
 
     s = None
     if line == 'joined':
@@ -438,10 +437,6 @@ def get_config_options():
     znc_timestamp = weechat.config_get_plugin('timestamp')
 
 
-def info_current_playback(data, info_name, arguments):
-    global current_playback
-    return current_playback
-
 # -----------------------------------------------------------------------------
 # Main
 
@@ -464,11 +459,6 @@ if __name__ == '__main__' and import_ok and \
             weechat.config_set_plugin(opt, val)
 
     weechat.hook_modifier('weechat_print', 'playback_cb', '')
-
-    weechat.hook_info("znc-playback",
-            "Returns the name \"<server>.<channel>\" of the playback currently "\
-            "in progess. Returns \"\" if there's none.",
-            "", "info_current_playback", "")
     # -------------------------------------------------------------------------
     # Debug
 
